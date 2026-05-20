@@ -16,37 +16,23 @@ const Quiz = require(path.join(__dirname, "models", "Quiz"));
 const app = express();
 const httpServer = http.createServer(app);
 
-// ✅ Define allowedOrigins BEFORE using it
-const allowedOrigins = [
-  "https://frontend-quiz-ten.vercel.app",
-  "https://frontend-quiz-ten.vercel.app/",
-  "http://localhost:5173",
-  "http://localhost:5174"
-];
+
 
 // ✅ Use allowedOrigins in socket.io
-const io = new Server(httpServer, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "Authorization"]
-  }
-});
-
-// ✅ CORS Middleware
+// ✅ Simple CORS Setup
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
-  credentials: true,
+  origin: "*",
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
+// ✅ Socket.IO CORS
+const io = new Server(httpServer, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
 app.use(express.static(path.join(__dirname, "build")));
 app.use(express.json({ limit: "50mb" }));
 app.use(bodyParser.json({ limit: "50mb" }));
