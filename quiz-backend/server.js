@@ -252,7 +252,10 @@ app.post("/api/quizzes/:quizId/submit", authMiddleware, async (req, res) => {
 
     await User.findByIdAndUpdate(
       userId,
-      { $inc: { correctAnswer: correctCount } },
+      { 
+        $inc: { correctAnswer: correctCount },
+        $set: { hasTakenQuiz: true }
+      },
       { new: true }
     );
 
@@ -295,7 +298,10 @@ app.post("/submit-quiz", async (req, res) => {
       { new: true }
     );
 
-    await User.findByIdAndUpdate(userId, { $inc: { correctAnswer: correctCount } });
+    await User.findByIdAndUpdate(userId, { 
+      $inc: { correctAnswer: correctCount },
+      $set: { hasTakenQuiz: true }
+    });
 
     res.json({ message: "Quiz submitted successfully", correctCount });
   } catch (error) {
@@ -304,33 +310,46 @@ app.post("/submit-quiz", async (req, res) => {
   }
 });
 
-app.get("/api/leaderboard", async (req, res) => {
+const formatLeaderboard = async () => {
+  const users = await User.find()
+    .sort({ correctAnswer: -1 })
+    .select("username correctAnswer");
+
+  let rank = 1;
+  let previousScore = null;
+  let sameRankCount = 0;
+
+  return users.map((user) => {
+    if (user.correctAnswer === previousScore) {
+      sameRankCount++;
+    } else {
+      rank += sameRankCount;
+      sameRankCount = 1;
+    }
+
+    previousScore = user.correctAnswer;
+
+    return {
+      rank,
+      username: user.username,
+      correctAnswer: user.correctAnswer || 0
+    };
+  });
+};
+
+app.get("/api/leaderboard", authMiddleware, async (req, res) => {
   try {
-    const users = await User.find()
-      .sort({ correctAnswer: -1 })
-      .select("username correctAnswer");
+    const requestingUser = await User.findById(req.userId);
+    if (!requestingUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
-    let rank = 1;
-    let previousScore = null;
-    let sameRankCount = 0;
+    if (!requestingUser.hasTakenQuiz) {
+      return res.status(200).json({ hasTakenQuiz: false, leaderboard: [] });
+    }
 
-    const leaderboard = users.map((user) => {
-      if (user.correctAnswer === previousScore) {
-        sameRankCount++;
-      } else {
-        rank += sameRankCount;
-        sameRankCount = 1;
-      }
-
-      previousScore = user.correctAnswer;
-
-      return {
-        rank,
-        username: user.username
-      };
-    });
-
-    res.status(200).json(leaderboard);
+    const leaderboard = await formatLeaderboard();
+    res.status(200).json({ hasTakenQuiz: true, leaderboard });
   } catch (error) {
     console.error("Error fetching leaderboard:", error);
     res.status(500).json({ error: "Internal Server Error" });
@@ -343,9 +362,7 @@ app.get("/api/health", (req, res) => {
 
 // ✅ Socket.IO Connection
 const getLeaderboard = async () => {
-  return await User.find()
-    .sort({ correctAnswer: -1 })
-    .select("username correctAnswer");
+  return await formatLeaderboard();
 };
 
 io.on("connection", (socket) => {
