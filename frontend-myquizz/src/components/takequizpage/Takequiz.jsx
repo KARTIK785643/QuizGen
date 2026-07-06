@@ -27,7 +27,18 @@ const TakeQuiz = () => {
         id = id.split("/").pop();
       }
 
-      const response = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/api/quizzes/${id}`);
+      const token = localStorage.getItem("token");
+      if (!token) {
+        setError("You must be logged in to take a quiz.");
+        setLoading(false);
+        return;
+      }
+
+      const response = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/api/quizzes/${id}`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
 
       if (!response.data || !response.data.questions || response.data.questions.length === 0) {
         throw new Error("Invalid quiz data format");
@@ -68,7 +79,11 @@ const TakeQuiz = () => {
       setUserAnswers([]);
       setQuizCompleted(false);
     } catch (error) {
-      setError("Invalid Quiz ID or Link. Please try again.");
+      if (error.response && error.response.data && (error.response.data.message || error.response.data.error)) {
+        setError(error.response.data.message || error.response.data.error);
+      } else {
+        setError("Invalid Quiz ID or Link. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -76,7 +91,7 @@ const TakeQuiz = () => {
 
   const submitQuizResult = async (finalUserAnswers) => {
     try {
-      const userId = localStorage.getItem("userId") || "guest"; 
+      const userId = localStorage.getItem("userId") || "guest";
       const token = localStorage.getItem("token");
       const payload = {
         userId,
@@ -139,7 +154,7 @@ const TakeQuiz = () => {
   return (
     <div className="take-quiz-container">
       {!quizLoaded ? (
-        <motion.div 
+        <motion.div
           className="quiz-link-card glass-card"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -149,7 +164,7 @@ const TakeQuiz = () => {
           </div>
           <h2>Join a Quiz</h2>
           <p style={{ color: 'var(--text-muted)', marginBottom: '32px' }}>Enter the unique link or ID of the quiz to get started.</p>
-          
+
           <input
             type="text"
             placeholder="Paste quiz link here..."
@@ -158,12 +173,12 @@ const TakeQuiz = () => {
             className="input-field quiz-link-input"
           />
           <button onClick={handleQuizLinkSubmit} className="btn-primary" style={{ width: '100%', padding: '16px', fontSize: '1.2rem' }} disabled={loading}>
-            {loading ? "Loading..." : <><PlayCircle size={24}/> Start Quiz</>}
+            {loading ? "Loading..." : <><PlayCircle size={24} /> Start Quiz</>}
           </button>
           {error && <p style={{ color: '#ff4d4d', marginTop: '16px' }}>{error}</p>}
         </motion.div>
       ) : quizCompleted ? (
-        <motion.div 
+        <motion.div
           className="quiz-result-card glass-card"
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -184,7 +199,7 @@ const TakeQuiz = () => {
             <div className="progress-fill" style={{ width: `${progressPercentage}%` }}></div>
           </div>
           <AnimatePresence mode="wait">
-            <motion.div 
+            <motion.div
               key={currentQuestionIndex}
               className="quiz-question-card glass-card"
               initial={{ x: 50, opacity: 0 }}
@@ -197,11 +212,11 @@ const TakeQuiz = () => {
                   <div className="question-header">
                     <span style={{ color: 'var(--primary)', fontWeight: '600' }}>Question {currentQuestionIndex + 1} of {selectedQuiz.questions.length}</span>
                   </div>
-                  
+
                   <h3 className="question-text">{getQuestionText(currentQuestion)}</h3>
 
                   {selectedQuiz.image && currentQuestionIndex === 0 && (
-                     <img src={selectedQuiz.image} alt="Quiz Cover" style={{ width: '100%', maxHeight: '200px', objectFit: 'cover', borderRadius: '8px', marginBottom: '24px' }} />
+                    <img src={selectedQuiz.image} alt="Quiz Cover" style={{ width: '100%', maxHeight: '200px', objectFit: 'cover', borderRadius: '8px', marginBottom: '24px' }} />
                   )}
 
                   {currentQuestion.image && (
@@ -228,8 +243,8 @@ const TakeQuiz = () => {
                   </div>
 
                   <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <button 
-                      onClick={handleNext} 
+                    <button
+                      onClick={handleNext}
                       className="btn-primary"
                       disabled={selectedOption === null}
                       style={{ padding: '12px 32px' }}
