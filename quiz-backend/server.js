@@ -16,30 +16,44 @@ const Quiz = require(path.join(__dirname, "models", "Quiz"));
 const app = express();
 const httpServer = http.createServer(app);
 
-
+// ✅ Define allowedOrigins BEFORE using it
+const allowedOrigins = [
+  "https://frontend-quiz-ten.vercel.app",
+  "https://frontend-quiz-ten.vercel.app/",
+  "http://localhost:5173",
+  "http://localhost:5174"
+];
 
 // ✅ Use allowedOrigins in socket.io
-// ✅ Simple CORS Setup
+const io = new Server(httpServer, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type", "Authorization"]
+  }
+});
+
+// ✅ CORS Middleware
 app.use(cors({
-  origin: "*",
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
-// ✅ Socket.IO CORS
-const io = new Server(httpServer, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
 app.use(express.static(path.join(__dirname, "build")));
 app.use(express.json({ limit: "50mb" }));
 app.use(bodyParser.json({ limit: "50mb" }));
 
 const PORT = process.env.PORT || 5000;
-const MONGODB_URI = process.env.MONGODB_URI;
-const JWT_SECRET = process.env.JWT_SECRET;
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb+srv://kartik4023:Kartik123@mediquiz.ovwzn.mongodb.net/myquizDB?retryWrites=true&w=majority&appName=Mediquiz";
+const JWT_SECRET = process.env.JWT_SECRET || "your_secret_key";
 
 // ✅ Auth Middleware
 const authMiddleware = (req, res, next) => {
@@ -236,7 +250,10 @@ app.post("/api/quizzes/:quizId/submit", authMiddleware, async (req, res) => {
 
     await User.findByIdAndUpdate(
       userId,
-      { $inc: { correctAnswer: correctCount } },
+      { 
+        $inc: { correctAnswer: correctCount },
+        $set: { hasTakenQuiz: true }
+      },
       { new: true }
     );
 
@@ -246,11 +263,12 @@ app.post("/api/quizzes/:quizId/submit", authMiddleware, async (req, res) => {
     );
 
     setTimeout(async () => {
-      const updatedLeaderboard = await User.find()
-        .sort({ correctAnswer: -1 })
-        .select("username correctAnswer");
-
-      io.emit("leaderboardUpdated", updatedLeaderboard);
+      try {
+        const updatedLeaderboard = await fetchAndFormatLeaderboard();
+        io.emit("leaderboardUpdated", updatedLeaderboard);
+      } catch (err) {
+        console.error("Error emitting socket leaderboard update:", err);
+      }
     }, 500);
 
     res.status(200).json({ message: "Quiz submitted!", correctAnswers: correctCount });
@@ -279,7 +297,19 @@ app.post("/submit-quiz", async (req, res) => {
       { new: true }
     );
 
-    await User.findByIdAndUpdate(userId, { $inc: { correctAnswer: correctCount } });
+    await User.findByIdAndUpdate(userId, { 
+      $inc: { correctAnswer: correctCount },
+      $set: { hasTakenQuiz: true }
+    });
+
+    setTimeout(async () => {
+      try {
+        const updatedLeaderboard = await fetchAndFormatLeaderboard();
+        io.emit("leaderboardUpdated", updatedLeaderboard);
+      } catch (err) {
+        console.error("Error emitting socket leaderboard update:", err);
+      }
+    }, 500);
 
     res.json({ message: "Quiz submitted successfully", correctCount });
   } catch (error) {
@@ -288,32 +318,41 @@ app.post("/submit-quiz", async (req, res) => {
   }
 });
 
+const fetchAndFormatLeaderboard = async () => {
+  const users = await User.find({
+    $or: [
+      { hasTakenQuiz: true },
+      { correctAnswer: { $gt: 0 } }
+    ]
+  })
+    .sort({ correctAnswer: -1 })
+    .select("username correctAnswer");
+
+  let rank = 1;
+  let previousScore = null;
+  let sameRankCount = 0;
+
+  return users.map((user) => {
+    if (user.correctAnswer === previousScore) {
+      sameRankCount++;
+    } else {
+      rank += sameRankCount;
+      sameRankCount = 1;
+    }
+
+    previousScore = user.correctAnswer;
+
+    return {
+      rank,
+      username: user.username,
+      correctAnswer: user.correctAnswer
+    };
+  });
+};
+
 app.get("/api/leaderboard", async (req, res) => {
   try {
-    const users = await User.find()
-      .sort({ correctAnswer: -1 })
-      .select("username correctAnswer");
-
-    let rank = 1;
-    let previousScore = null;
-    let sameRankCount = 0;
-
-    const leaderboard = users.map((user) => {
-      if (user.correctAnswer === previousScore) {
-        sameRankCount++;
-      } else {
-        rank += sameRankCount;
-        sameRankCount = 1;
-      }
-
-      previousScore = user.correctAnswer;
-
-      return {
-        rank,
-        username: user.username
-      };
-    });
-
+    const leaderboard = await fetchAndFormatLeaderboard();
     res.status(200).json(leaderboard);
   } catch (error) {
     console.error("Error fetching leaderboard:", error);
@@ -326,16 +365,12 @@ app.get("/api/health", (req, res) => {
 });
 
 // ✅ Socket.IO Connection
-const getLeaderboard = async () => {
-  return await User.find()
-    .sort({ correctAnswer: -1 })
-    .select("username correctAnswer");
-};
-
 io.on("connection", (socket) => {
   console.log("🔗 New client connected:", socket.id);
-  getLeaderboard().then((leaderboard) => {
+  fetchAndFormatLeaderboard().then((leaderboard) => {
     socket.emit("leaderboardUpdated", leaderboard);
+  }).catch((err) => {
+    console.error("Error sending socket leaderboard update:", err);
   });
 
   socket.on("disconnect", () => {
