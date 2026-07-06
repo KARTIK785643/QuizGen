@@ -181,12 +181,21 @@ app.get("/api/quizzes", authMiddleware, async (req, res) => {
   }
 });
 
-app.get("/api/quizzes/:id", async (req, res) => {
+app.get("/api/quizzes/:id", authMiddleware, async (req, res) => {
   try {
     const quiz = await Quiz.findById(req.params.id);
     if (!quiz) {
       return res.status(404).json({ message: "Quiz not found" });
     }
+
+    // Check if user already attempted the quiz
+    const alreadyAttempted = quiz.results.some(
+      (result) => String(result.userId) === String(req.userId)
+    );
+    if (alreadyAttempted) {
+      return res.status(400).json({ message: "You have already attempted this quiz." });
+    }
+
     res.json(quiz);
   } catch (error) {
     console.error("Error fetching quiz:", error);
@@ -243,6 +252,14 @@ app.post("/api/quizzes/:quizId/submit", authMiddleware, async (req, res) => {
       return res.status(404).json({ error: "Quiz not found" });
     }
 
+    // Check if user already attempted the quiz
+    const alreadyAttempted = quiz.results.some(
+      (result) => String(result.userId) === String(userId)
+    );
+    if (alreadyAttempted) {
+      return res.status(400).json({ error: "You have already attempted this quiz." });
+    }
+
     let correctCount = 0;
     quiz.questions.forEach((q, idx) => {
       if (String(q.correctAnswer).trim() === String(answers[idx]).trim()) {
@@ -254,22 +271,25 @@ app.post("/api/quizzes/:quizId/submit", authMiddleware, async (req, res) => {
       userId,
       { 
         $inc: { correctAnswer: correctCount },
-        $set: { hasTakenQuiz: true }
+        $set: { 
+          hasTakenQuiz: true,
+          latestQuizAttempted: quizId
+        }
       },
       { new: true }
     );
 
-    await Quiz.findByIdAndUpdate(
+    // Save score to quiz results
+    const updatedQuiz = await Quiz.findByIdAndUpdate(
       quizId,
-      { $push: { results: { userId: userId, score: correctCount } } }
+      { $push: { results: { userId: userId, score: correctCount } } },
+      { new: true }
     );
 
+    // Broadcast update for this specific quiz
     setTimeout(async () => {
-      const updatedLeaderboard = await User.find()
-        .sort({ correctAnswer: -1 })
-        .select("username correctAnswer");
-
-      io.emit("leaderboardUpdated", updatedLeaderboard);
+      const leaderboard = await formatLeaderboard(quizId);
+      io.emit("leaderboardUpdated", { quizId, leaderboard });
     }, 500);
 
     res.status(200).json({ message: "Quiz submitted!", correctAnswers: correctCount });
@@ -284,6 +304,14 @@ app.post("/submit-quiz", async (req, res) => {
     const { quizId, userId, answers } = req.body;
     const quiz = await Quiz.findById(quizId);
     if (!quiz) return res.status(404).json({ error: "Quiz not found" });
+
+    // Check if user already attempted the quiz
+    const alreadyAttempted = quiz.results.some(
+      (result) => String(result.userId) === String(userId)
+    );
+    if (alreadyAttempted) {
+      return res.status(400).json({ error: "You have already attempted this quiz." });
+    }
 
     let correctCount = 0;
     quiz.questions.forEach((q, index) => {
@@ -300,8 +328,17 @@ app.post("/submit-quiz", async (req, res) => {
 
     await User.findByIdAndUpdate(userId, { 
       $inc: { correctAnswer: correctCount },
-      $set: { hasTakenQuiz: true }
+      $set: { 
+        hasTakenQuiz: true,
+        latestQuizAttempted: quizId
+      }
     });
+
+    // Broadcast update for this specific quiz
+    setTimeout(async () => {
+      const leaderboard = await formatLeaderboard(quizId);
+      io.emit("leaderboardUpdated", { quizId, leaderboard });
+    }, 500);
 
     res.json({ message: "Quiz submitted successfully", correctCount });
   } catch (error) {
@@ -310,29 +347,38 @@ app.post("/submit-quiz", async (req, res) => {
   }
 });
 
-const formatLeaderboard = async () => {
-  const users = await User.find()
-    .sort({ correctAnswer: -1 })
-    .select("username correctAnswer");
+const formatLeaderboard = async (quizId) => {
+  if (!quizId) return [];
+  const quiz = await Quiz.findById(quizId).populate("results.userId", "username");
+  if (!quiz || !quiz.results) return [];
+
+  // Map and sort results by score descending
+  const sortedResults = quiz.results
+    .map((res) => ({
+      userId: res.userId?._id,
+      username: res.userId?.username || "Unknown User",
+      score: res.score || 0
+    }))
+    .sort((a, b) => b.score - a.score);
 
   let rank = 1;
   let previousScore = null;
   let sameRankCount = 0;
 
-  return users.map((user) => {
-    if (user.correctAnswer === previousScore) {
+  return sortedResults.map((item) => {
+    if (item.score === previousScore) {
       sameRankCount++;
     } else {
       rank += sameRankCount;
       sameRankCount = 1;
     }
 
-    previousScore = user.correctAnswer;
+    previousScore = item.score;
 
     return {
       rank,
-      username: user.username,
-      correctAnswer: user.correctAnswer || 0
+      username: item.username,
+      correctAnswer: item.score
     };
   });
 };
@@ -344,12 +390,19 @@ app.get("/api/leaderboard", authMiddleware, async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    if (!requestingUser.hasTakenQuiz) {
+    if (!requestingUser.latestQuizAttempted) {
       return res.status(200).json({ hasTakenQuiz: false, leaderboard: [] });
     }
 
-    const leaderboard = await formatLeaderboard();
-    res.status(200).json({ hasTakenQuiz: true, leaderboard });
+    const leaderboard = await formatLeaderboard(requestingUser.latestQuizAttempted);
+    const quiz = await Quiz.findById(requestingUser.latestQuizAttempted);
+
+    res.status(200).json({ 
+      hasTakenQuiz: true, 
+      quizId: requestingUser.latestQuizAttempted,
+      quizTitle: quiz ? quiz.title : "Quiz",
+      leaderboard 
+    });
   } catch (error) {
     console.error("Error fetching leaderboard:", error);
     res.status(500).json({ error: "Internal Server Error" });
@@ -361,15 +414,8 @@ app.get("/api/health", (req, res) => {
 });
 
 // ✅ Socket.IO Connection
-const getLeaderboard = async () => {
-  return await formatLeaderboard();
-};
-
 io.on("connection", (socket) => {
   console.log("🔗 New client connected:", socket.id);
-  getLeaderboard().then((leaderboard) => {
-    socket.emit("leaderboardUpdated", leaderboard);
-  });
 
   socket.on("disconnect", () => {
     console.log("❌ Client disconnected:", socket.id);
