@@ -20,6 +20,8 @@ const httpServer = http.createServer(app);
 const allowedOrigins = [
   "https://frontend-quiz-ten.vercel.app",
   "https://frontend-quiz-ten.vercel.app/",
+  "https://quiz-gen-9331.vercel.app",
+  "https://quiz-gen-9331.vercel.app/",
   "http://localhost:5173",
   "http://localhost:5174"
 ];
@@ -250,10 +252,7 @@ app.post("/api/quizzes/:quizId/submit", authMiddleware, async (req, res) => {
 
     await User.findByIdAndUpdate(
       userId,
-      { 
-        $inc: { correctAnswer: correctCount },
-        $set: { hasTakenQuiz: true }
-      },
+      { $inc: { correctAnswer: correctCount } },
       { new: true }
     );
 
@@ -263,12 +262,11 @@ app.post("/api/quizzes/:quizId/submit", authMiddleware, async (req, res) => {
     );
 
     setTimeout(async () => {
-      try {
-        const updatedLeaderboard = await fetchAndFormatLeaderboard();
-        io.emit("leaderboardUpdated", updatedLeaderboard);
-      } catch (err) {
-        console.error("Error emitting socket leaderboard update:", err);
-      }
+      const updatedLeaderboard = await User.find()
+        .sort({ correctAnswer: -1 })
+        .select("username correctAnswer");
+
+      io.emit("leaderboardUpdated", updatedLeaderboard);
     }, 500);
 
     res.status(200).json({ message: "Quiz submitted!", correctAnswers: correctCount });
@@ -297,19 +295,7 @@ app.post("/submit-quiz", async (req, res) => {
       { new: true }
     );
 
-    await User.findByIdAndUpdate(userId, { 
-      $inc: { correctAnswer: correctCount },
-      $set: { hasTakenQuiz: true }
-    });
-
-    setTimeout(async () => {
-      try {
-        const updatedLeaderboard = await fetchAndFormatLeaderboard();
-        io.emit("leaderboardUpdated", updatedLeaderboard);
-      } catch (err) {
-        console.error("Error emitting socket leaderboard update:", err);
-      }
-    }, 500);
+    await User.findByIdAndUpdate(userId, { $inc: { correctAnswer: correctCount } });
 
     res.json({ message: "Quiz submitted successfully", correctCount });
   } catch (error) {
@@ -318,41 +304,32 @@ app.post("/submit-quiz", async (req, res) => {
   }
 });
 
-const fetchAndFormatLeaderboard = async () => {
-  const users = await User.find({
-    $or: [
-      { hasTakenQuiz: true },
-      { correctAnswer: { $gt: 0 } }
-    ]
-  })
-    .sort({ correctAnswer: -1 })
-    .select("username correctAnswer");
-
-  let rank = 1;
-  let previousScore = null;
-  let sameRankCount = 0;
-
-  return users.map((user) => {
-    if (user.correctAnswer === previousScore) {
-      sameRankCount++;
-    } else {
-      rank += sameRankCount;
-      sameRankCount = 1;
-    }
-
-    previousScore = user.correctAnswer;
-
-    return {
-      rank,
-      username: user.username,
-      correctAnswer: user.correctAnswer
-    };
-  });
-};
-
 app.get("/api/leaderboard", async (req, res) => {
   try {
-    const leaderboard = await fetchAndFormatLeaderboard();
+    const users = await User.find()
+      .sort({ correctAnswer: -1 })
+      .select("username correctAnswer");
+
+    let rank = 1;
+    let previousScore = null;
+    let sameRankCount = 0;
+
+    const leaderboard = users.map((user) => {
+      if (user.correctAnswer === previousScore) {
+        sameRankCount++;
+      } else {
+        rank += sameRankCount;
+        sameRankCount = 1;
+      }
+
+      previousScore = user.correctAnswer;
+
+      return {
+        rank,
+        username: user.username
+      };
+    });
+
     res.status(200).json(leaderboard);
   } catch (error) {
     console.error("Error fetching leaderboard:", error);
@@ -365,12 +342,16 @@ app.get("/api/health", (req, res) => {
 });
 
 // ✅ Socket.IO Connection
+const getLeaderboard = async () => {
+  return await User.find()
+    .sort({ correctAnswer: -1 })
+    .select("username correctAnswer");
+};
+
 io.on("connection", (socket) => {
   console.log("🔗 New client connected:", socket.id);
-  fetchAndFormatLeaderboard().then((leaderboard) => {
+  getLeaderboard().then((leaderboard) => {
     socket.emit("leaderboardUpdated", leaderboard);
-  }).catch((err) => {
-    console.error("Error sending socket leaderboard update:", err);
   });
 
   socket.on("disconnect", () => {
