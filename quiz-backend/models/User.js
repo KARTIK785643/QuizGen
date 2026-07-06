@@ -5,7 +5,8 @@ const userSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     correctAnswer: { type: Number, default: 0 }, // ✅ Ensuring it's a Number
-    hasTakenQuiz: { type: Boolean, default: false } // ✅ Track if they have taken any quiz
+    hasTakenQuiz: { type: Boolean, default: false }, // ✅ Track if they have taken any quiz
+    latestQuizAttempted: { type: mongoose.Schema.Types.ObjectId, ref: "Quiz", default: null }
 });
 
 module.exports = mongoose.model("User", userSchema);
