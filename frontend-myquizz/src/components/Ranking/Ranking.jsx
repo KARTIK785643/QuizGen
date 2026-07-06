@@ -12,6 +12,8 @@ const socket = io(`${import.meta.env.VITE_BACKEND_URL}`, {
 const RankingPage = () => {
     const [users, setUsers] = useState([]);
     const [hasTakenQuiz, setHasTakenQuiz] = useState(false);
+    const [quizTitle, setQuizTitle] = useState("");
+    const [quizId, setQuizId] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
@@ -35,6 +37,8 @@ const RankingPage = () => {
 
                 const data = await response.json();
                 setHasTakenQuiz(data.hasTakenQuiz);
+                setQuizId(data.quizId || null);
+                setQuizTitle(data.quizTitle || "");
                 setUsers(data.leaderboard || []);
             } catch (err) {
                 console.error("Error fetching leaderboard:", err);
@@ -46,12 +50,12 @@ const RankingPage = () => {
 
         fetchLeaderboard();
 
-        socket.on("leaderboardUpdated", (updatedLeaderboard) => {
-            setHasTakenQuiz((currentHasTakenQuiz) => {
-                if (currentHasTakenQuiz) {
-                    setUsers(updatedLeaderboard);
+        socket.on("leaderboardUpdated", (data) => {
+            setQuizId((currentQuizId) => {
+                if (currentQuizId && data && currentQuizId === data.quizId) {
+                    setUsers(data.leaderboard || []);
                 }
-                return currentHasTakenQuiz;
+                return currentQuizId;
             });
         });
 
@@ -69,8 +73,12 @@ const RankingPage = () => {
         >
             <div className="ranking-header">
                 <Trophy size={48} color="var(--primary)" />
-                <h2>Global <span className="text-gradient">Leaderboard</span></h2>
-                <p>See how you stack up against the best quiz takers!</p>
+                {hasTakenQuiz && quizTitle ? (
+                    <h2>Leaderboard for <span className="text-gradient">{quizTitle}</span></h2>
+                ) : (
+                    <h2>Global <span className="text-gradient">Leaderboard</span></h2>
+                )}
+                <p>See how you stack up against other players who attempted this quiz!</p>
             </div>
 
             {loading && <div className="loading-state">Loading rankings...</div>}
